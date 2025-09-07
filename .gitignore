@@ -1,0 +1,18 @@
+# NixOS specific
+result
+.direnv
+.direnvrc
+
+# Backup files
+*.bak
+*.tmp
+*~
+
+# Secrets
+secrets/
+*.key
+*.pem
+
+# Local overrides
+local.nix
+override.nix
