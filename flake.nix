@@ -1,6 +1,5 @@
-# flake.nix
 {
-  description = "NixOS 25.05 secure Wayland desktop (Hyprland + NVIDIA) with Btrfs, Snapper, TPM2, Flatpak, Steam, direnv";
+  description = "NixOS 25.05 secure Wayland desktop (Hyprland + NVIDIA) with Btrfs, Snapper, TPM2, Flatpak, Steam, direnv, DoT";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -12,52 +11,63 @@
   outputs = { self, nixpkgs, home-manager, lanzaboote, ... }:
   let
     system = "x86_64-linux";
-    pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
   in {
     nixosConfigurations.HOSTNAME = nixpkgs.lib.nixosSystem {
       inherit system;
       modules = [
         ./hardware-configuration.nix
 
-          # Lanzaboote Secure Boot + systemd initrd + TPM2
         lanzaboote.nixosModules.lanzaboote
         ({ lib, pkgs, ... }: {
+          # Secure Boot via Lanzaboote + systemd initrd + TPM2
           boot.loader.systemd-boot.enable = lib.mkForce false;
+          boot.loader.efi.canTouchEfiVariables = true;
+
           boot.lanzaboote = {
             enable = true;
-            pkiBundle = "/etc/secureboot";
+            pkiBundle = "/var/lib/sbctl";  # sbctl's current default
           };
+
           boot.initrd.systemd.enable = true;
           boot.initrd.systemd.tpm2.enable = true;
           security.tpm2.enable = true;
-          boot.loader.efi.canTouchEfiVariables = true;
-          boot.loader.efi.efiSysMountPoint = "/boot/efi";
-        })
 
-        # Base system
-        ({ config, lib, pkgs, ... }: {
+          # Nix features for the installed system
+          nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
+          # Host basics
           networking.hostName = "HOSTNAME";
           time.timeZone = "Asia/Kolkata";
-          i18n.defaultLocale = "en_US.UTF-8";
-          i18n.extraLocaleSettings.LC_TIME = "en_US.UTF-8";
 
-          # Btrfs + hibernation-friendly swapfile path (create post-install)
+          # Locales (supported and correct formatting)
+          i18n.defaultLocale = "en_US.UTF-8";
+          i18n.supportedLocales = [
+            "en_US.UTF-8/UTF-8"
+            "en_GB.UTF-8/UTF-8"
+          ];
+          i18n.extraLocaleSettings.LC_TIME = "en_GB.UTF-8";
+          system.stateVersion = "25.05";
+
+          # Filesystems and trim
           services.fstrim.enable = true;
 
-          # LUKS root with TPM2 auto-unlock (fill UUID and name as created during install)
+          # Encrypted root (fill UUID)
           boot.initrd.luks.devices.cryptroot = {
             device = "/dev/disk/by-uuid/UUID-OF-LUKS-PV";
             crypttabExtraOpts = [ "tpm2-device=auto" "tpm2-try-fallback=yes" ];
           };
 
-          # Swap device (size set during install; no resume params needed with systemd initrd)
-          swapDevices = [ { device = "/dev/disk/by-uuid/SWAP-UUID"; } ];
+          # Swapfile on Btrfs (already created NOCOW)
+          swapDevices = [ { device = "/swap/swapfile"; } ];
+
+          # Graphics: modern interface (replaces hardware.opengl)
+          hardware.graphics = {
+            enable = true;
+            enable32Bit = true;
+          };
 
           # NVIDIA + Wayland
           services.xserver.enable = false;
-          hardware.opengl.enable = true;
-          hardware.opengl.driSupport = true;
-          hardware.opengl.driSupport32Bit = true;
           services.xserver.videoDrivers = [ "nvidia" ];
           hardware.nvidia = {
             modesetting.enable = true;
@@ -68,7 +78,7 @@
             "nvidia.NVreg_PreserveVideoMemoryAllocations=1"
           ];
 
-          # Hyprland + portals + PipeWire
+          # Hyprland + portals + audio
           programs.hyprland.enable = true;
           xdg.portal = {
             enable = true;
@@ -84,7 +94,7 @@
             wireplumber.enable = true;
           };
 
-          # Steam + Gamescope
+          # Gaming
           programs.steam = {
             enable = true;
             gamescopeSession.enable = true;
@@ -94,21 +104,24 @@
           # Flatpak
           services.flatpak.enable = true;
 
-          # Encrypted DNS (DoT) to Cloudflare via systemd-resolved
+          # Cloudflare DNS over TLS via systemd-resolved
           services.resolved = {
             enable = true;
-            dnsOverTls = "opportunistic";
-            fallbackDns = [ "1.1.1.1#cloudflare-dns.com" "1.0.0.1#cloudflare-dns.com" ];
+            dnsovertls = "opportunistic";
+            fallbackDns = [
+              "1.1.1.1#cloudflare-dns.com"
+              "1.0.0.1#cloudflare-dns.com"
+            ];
           };
           networking.networkmanager.enable = true;
 
-          # Containers / virtualization
+          # Containers
           virtualisation = {
             docker.enable = true;
             podman.enable = true;
           };
 
-          # SSH hardening (optional server role)
+          # SSH
           services.openssh = {
             enable = true;
             settings.PasswordAuthentication = false;
@@ -116,12 +129,14 @@
             settings.PermitRootLogin = "no";
           };
 
-          # User + HM
+          # User and shells
+          nixpkgs.config.allowUnfree = true;
           users.users.USERNAME = {
             isNormalUser = true;
             extraGroups = [ "wheel" "networkmanager" "video" "audio" "docker" ];
             shell = pkgs.fish;
           };
+          programs.fish.enable = true;
 
           # Auto updates (system)
           system.autoUpgrade = {
@@ -132,16 +147,40 @@
           };
 
           environment.systemPackages = with pkgs; [
-            git vim wget curl kitty alacritty
+            git vim wget curl
             wl-clipboard
+            kitty alacritty
           ];
-
-          # Nix tweaks for dev
-          nix.settings.experimental-features = [ "nix-command" "flakes" ];
-          system.stateVersion = "25.05";
         })
 
-        # Home Manager: fish, editors, terminals, direnv, basic desktop apps
+        # Snapper policies (root + home)
+        ({ config, lib, pkgs, ... }: {
+          services.snapper = {
+            snapshotRootOnBoot = true;
+            configs = {
+              root = {
+                SUBVOLUME = "/";
+                ALLOW_USERS = [ "root" ];
+                TIMELINE_CREATE = true;
+                TIMELINE_CLEANUP = true;
+                TIMELINE_MIN_AGE = "1800";
+                TIMELINE_LIMIT_HOURLY = 12;
+                TIMELINE_LIMIT_DAILY = 7;
+                TIMELINE_LIMIT_WEEKLY = 4;
+                TIMELINE_LIMIT_MONTHLY = 3;
+                TIMELINE_LIMIT_YEARLY = 0;
+              };
+              home = {
+                SUBVOLUME = "/home";
+                ALLOW_USERS = [ "USERNAME" ];
+                TIMELINE_CREATE = true;
+                TIMELINE_CLEANUP = true;
+              };
+            };
+          };
+        })
+
+        # Home Manager: editors, terminals, direnv
         home-manager.nixosModules.home-manager
         {
           home-manager.useGlobalPkgs = true;
@@ -149,12 +188,7 @@
           home-manager.users.USERNAME = { pkgs, ... }: {
             home.stateVersion = "25.05";
             programs = {
-              fish = {
-                enable = true;
-                shellInit = ''
-                  # Fish shell initialization
-                '';
-              };
+              fish.enable = true;
               neovim.enable = true;
               vscode.enable = true;
               direnv = {
@@ -163,7 +197,6 @@
               };
             };
             home.packages = with pkgs; [
-              # user-level utilities
               kitty alacritty
             ];
           };
