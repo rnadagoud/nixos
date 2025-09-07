@@ -19,7 +19,7 @@
       modules = [
         ./hardware-configuration.nix
 
-        # Lanzaboote Secure Boot + systemd initrd + TPM2
+          # Lanzaboote Secure Boot + systemd initrd + TPM2
         lanzaboote.nixosModules.lanzaboote
         ({ lib, pkgs, ... }: {
           boot.loader.systemd-boot.enable = lib.mkForce false;
@@ -31,14 +31,15 @@
           boot.initrd.systemd.tpm2.enable = true;
           security.tpm2.enable = true;
           boot.loader.efi.canTouchEfiVariables = true;
+          boot.loader.efi.efiSysMountPoint = "/boot/efi";
         })
 
         # Base system
         ({ config, lib, pkgs, ... }: {
           networking.hostName = "HOSTNAME";
           time.timeZone = "Asia/Kolkata";
-          i18n.defaultLocale = "en_IN.UTF-8";
-          i18n.extraLocaleSettings.LC_TIME = "en_GB.UTF-8";
+          i18n.defaultLocale = "en_US.UTF-8";
+          i18n.extraLocaleSettings.LC_TIME = "en_US.UTF-8";
 
           # Btrfs + hibernation-friendly swapfile path (create post-install)
           services.fstrim.enable = true;
@@ -49,16 +50,14 @@
             crypttabExtraOpts = [ "tpm2-device=auto" "tpm2-try-fallback=yes" ];
           };
 
-          # Swapfile (size set during install; no resume params needed with systemd initrd)
-          swapDevices = [ { file = "/swap/swapfile"; } ];
+          # Swap device (size set during install; no resume params needed with systemd initrd)
+          swapDevices = [ { device = "/dev/disk/by-uuid/SWAP-UUID"; } ];
 
           # NVIDIA + Wayland
           services.xserver.enable = false;
-          hardware.opengl = {
-            enable = true;
-            driSupport = true;
-            driSupport32Bit = true;
-          };
+          hardware.opengl.enable = true;
+          hardware.opengl.driSupport = true;
+          hardware.opengl.driSupport32Bit = true;
           services.xserver.videoDrivers = [ "nvidia" ];
           hardware.nvidia = {
             modesetting.enable = true;
@@ -100,7 +99,6 @@
             enable = true;
             dnsOverTls = "opportunistic";
             fallbackDns = [ "1.1.1.1#cloudflare-dns.com" "1.0.0.1#cloudflare-dns.com" ];
-            dnsovertls = "opportunistic"; # redundancy for some versions
           };
           networking.networkmanager.enable = true;
 
@@ -140,6 +138,7 @@
 
           # Nix tweaks for dev
           nix.settings.experimental-features = [ "nix-command" "flakes" ];
+          system.stateVersion = "25.05";
         })
 
         # Home Manager: fish, editors, terminals, direnv, basic desktop apps
@@ -150,7 +149,12 @@
           home-manager.users.USERNAME = { pkgs, ... }: {
             home.stateVersion = "25.05";
             programs = {
-              fish.enable = true;
+              fish = {
+                enable = true;
+                shellInit = ''
+                  # Fish shell initialization
+                '';
+              };
               neovim.enable = true;
               vscode.enable = true;
               direnv = {
